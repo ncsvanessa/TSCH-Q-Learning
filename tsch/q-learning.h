@@ -7,7 +7,6 @@
 
 /******** Configuration *******/
 // Size of Q-value table (default is the default slotframe size)
-// Using explicit value to avoid circular dependency
 #ifndef Q_VALUE_LIST_SIZE
 #define Q_VALUE_LIST_SIZE 101  // TSCH_SCHEDULE_DEFAULT_LENGTH = 101
 #endif
@@ -27,11 +26,10 @@ typedef struct {
 
 /********** Functions *********/
 // TSCH-based reward function with retransmission penalty
-// Note: conflict detection disabled temporarily (always 0)
 float tsch_reward_function(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff_prev, 
                           uint8_t n_buff_new, float avg_retrans);
 
-// Legacy reward function (backward compatibility)
+// Legacy reward function
 float reward(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff, uint8_t n_buff_new);
 
 // Function to find the action with highest q-value, returns the index of max value

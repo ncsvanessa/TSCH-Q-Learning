@@ -15,7 +15,7 @@ static federated_state_t fed_state;
 /********** Helper Functions ***********/
 
 /**
- * Compare function for qsort (used in median calculation)
+ * Compare function for qsort
  */
 static int compare_float(const void *a, const void *b) {
     float fa = *(const float*)a;
@@ -116,7 +116,7 @@ uint8_t store_neighbor_q_table(uint16_t node_id, float *q_values, uint8_t num_sa
 }
 
 /**
- * Aggregate Q-tables using FedAvg (simple averaging)
+ * Aggregate Q-tables using FedAvg
  */
 uint8_t federated_aggregate_fedavg(void) {
     if (fed_state.num_active_neighbors == 0) {
@@ -181,7 +181,7 @@ uint8_t federated_aggregate_weighted(void) {
         temp_weighted[j] = 0.0;
     }
     
-    // Calculate total samples (for weight normalization)
+    // Calculate total samples
     uint32_t total_samples = fed_state.local_num_samples;
     for (int i = 0; i < MAX_FEDERATED_NEIGHBORS; i++) {
         if (fed_state.neighbors[i].is_active) {
@@ -223,7 +223,7 @@ uint8_t federated_aggregate_weighted(void) {
 }
 
 /**
- * Aggregate Q-tables using median (robust to outliers)
+ * Aggregate Q-tables using median
  */
 uint8_t federated_aggregate_median(void) {
     if (fed_state.num_active_neighbors == 0) {

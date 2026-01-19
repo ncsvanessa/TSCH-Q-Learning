@@ -15,7 +15,7 @@
 #define MAX_FEDERATED_NEIGHBORS 10
 #endif
 
-// Federated learning synchronization interval (in seconds)
+// Federated learning synchronization interval
 #ifndef FEDERATED_SYNC_INTERVAL
 #define FEDERATED_SYNC_INTERVAL 180
 #endif
@@ -80,13 +80,13 @@ uint8_t federated_aggregate_fedavg(void);
 uint8_t federated_aggregate_weighted(void);
 
 /**
- * Aggregate Q-tables using median value (more robust to outliers)
+ * Aggregate Q-tables using median value
  * Returns the number of neighbors included in aggregation
  */
 uint8_t federated_aggregate_median(void);
 
 /**
- * Main federated aggregation function - calls appropriate method
+ * Main federated aggregation function
  * Returns the number of neighbors included in aggregation
  */
 uint8_t federated_aggregate(void);
@@ -98,7 +98,7 @@ uint8_t federated_aggregate(void);
 float* get_local_q_table_for_sharing(void);
 
 /**
- * Increment local sample count (called after each local Q-table update)
+ * Increment local sample count
  */
 void increment_local_samples(void);
 
@@ -108,7 +108,7 @@ void increment_local_samples(void);
 uint8_t get_local_sample_count(void);
 
 /**
- * Clean up stale neighbor entries (not updated recently)
+ * Clean up stale neighbor entries
  * Removes entries older than timeout seconds
  */
 void cleanup_stale_neighbors(uint32_t timeout_seconds);

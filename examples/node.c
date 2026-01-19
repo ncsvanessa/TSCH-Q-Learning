@@ -19,7 +19,7 @@
 // period to send a packet to the udp server
 #define SEND_INTERVAL (60 * CLOCK_SECOND)
 
-// period to update Q-values (120s for better responsiveness)
+// period to update Q-values
 #define Q_TABLE_INTERVAL (120 * CLOCK_SECOND)
 
 // epsilon for epsilon-greedy exploration (0.15 = 15% exploration, 85% exploitation)
@@ -205,7 +205,7 @@ transmission_stats empty_schedule_records(uint8_t tx_rx) {
     LOG_INFO(" Receiving Operations in %lu seconds\n", (unsigned long)Q_TABLE_INTERVAL);
   }
   
-  // Calculate average retransmissions (only for TX)
+  // Calculate average retransmissions
   uint16_t total_retrans = 0;
   if (tx_rx == 0 && queue->size > 0) {
     for(int i = 0; i < queue->size; i++) {

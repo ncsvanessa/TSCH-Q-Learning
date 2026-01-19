@@ -28,10 +28,10 @@
 #define TSCH_SCHEDULE_CONF_MAX_LENGTH 101
 #define TSCH_SCHEDULE_CONF_MIN_LENGTH 8
 
-// Maximum number of TSCH links (must support max slotframe size)
+// Maximum number of TSCH links
 #define TSCH_SCHEDULE_CONF_MAX_LINKS 101
 
-// packet buffer length (increased to handle more traffic)
+// packet buffer length
 #define QUEUEBUF_CONF_NUM 8
 
 // Payload size
