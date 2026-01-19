@@ -9,9 +9,13 @@
 /********** global variables ***********/
 // parameters to calculate the reward (TSCH-based)
 float theta1 = 3.0;           // weight for successful transmissions
-float theta2 = 1.5;           // weight for buffer management
-float theta3 = 0.5;           // weight for conflicts
+float theta2 = 0.5;           // weight for buffer management (reduced from 1.5)
+float theta3 = 2.0;           // weight for retransmission penalty
+float theta4 = 0.5;           // weight for conflicts
 float conflict_penalty = 100.0; // penalty per conflict detected
+
+// Maximum buffer difference to consider (prevents extreme negative rewards)
+#define MAX_BUFFER_PENALTY 20
 
 // Q-value updating paramaters
 float learning_rate = 0.1;
@@ -33,8 +37,8 @@ typedef struct {
 /********** TSCH Reward Functions *********/
 
 /**
- * Compute reward for TSCH slotframe schedule based on throughput and conflicts
- * Adapted from Python notebook implementation
+ * Compute reward for TSCH slotframe schedule based on throughput, conflicts, and retransmissions
+ * Adapted from Python notebook implementation with retransmission penalty
  * 
  * Parameters:
  * - n_tx: number of successful transmissions
@@ -42,16 +46,31 @@ typedef struct {
  * - n_buff_prev: buffer size before scheduling period
  * - n_buff_new: buffer size after scheduling period
  * - n_conflicts: number of detected conflicts in the schedule
+ * - avg_retrans: average number of retransmissions per packet (1.0 = no retrans)
  * 
- * Returns: reward value (throughput - conflict penalties - buffer penalties)
+ * Returns: reward value (throughput - conflict penalties - buffer penalties - retransmission cost)
  */
 float tsch_reward_function(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff_prev, 
-                          uint8_t n_buff_new, uint8_t n_conflicts) {
+                          uint8_t n_buff_new, uint8_t n_conflicts, float avg_retrans) {
     float throughput = theta1 * (n_tx + n_rx);
-    float buffer_penalty = theta2 * (n_buff_prev > n_buff_new ? n_buff_prev - n_buff_new : 0);
+    
+    // Calculate buffer difference with cap to prevent extreme negative rewards
+    int buffer_diff = (int)n_buff_prev - (int)n_buff_new;
+    if (buffer_diff < 0) buffer_diff = 0;  // no penalty if buffer increased
+    if (buffer_diff > MAX_BUFFER_PENALTY) buffer_diff = MAX_BUFFER_PENALTY;  // cap penalty
+    
+    float buffer_penalty = theta2 * buffer_diff;
     float conflict_cost = conflict_penalty * n_conflicts;
     
-    return throughput - buffer_penalty - conflict_cost;
+    // Retransmission penalty: penalize (avg_retrans - 1.0)
+    // If avg_retrans = 1.0, no penalty (perfect transmission)
+    // If avg_retrans = 2.0, penalty = theta3 * 1.0
+    float retrans_penalty = 0.0;
+    if (avg_retrans > 1.0) {
+        retrans_penalty = theta3 * (avg_retrans - 1.0);
+    }
+    
+    return throughput - buffer_penalty - conflict_cost - retrans_penalty;
 }
 
 /**
@@ -70,6 +89,31 @@ uint8_t get_highest_q_val(void) {
         }
     }
     return max_val_index;
+}
+
+/**
+ * Epsilon-greedy action selection strategy
+ * Balances exploration (random actions) and exploitation (best known action)
+ * 
+ * Parameters:
+ * - epsilon: probability of random exploration (0.0 to 1.0)
+ *   - epsilon = 0.0: pure exploitation (always choose best action)
+ *   - epsilon = 1.0: pure exploration (always random)
+ *   - typical: 0.1 to 0.3 for good balance
+ * 
+ * Returns: selected action index
+ */
+uint8_t get_action_epsilon_greedy(float epsilon) {
+    // Generate random number between 0 and 1
+    float random_val = (float)random_rand() / RANDOM_RAND_MAX;
+    
+    if (random_val < epsilon) {
+        // Exploration: choose random action
+        return random_rand() % Q_VALUE_LIST_SIZE;
+    } else {
+        // Exploitation: choose best known action
+        return get_highest_q_val();
+    }
 }
 
 // Function to get the current state (buffer_size and energy_level)

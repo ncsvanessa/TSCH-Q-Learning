@@ -23,11 +23,16 @@
 /* Do not start TSCH at init, wait for NETSTACK_MAC.on() */
 #define TSCH_CONF_AUTOSTART 1
 
-/* 6TiSCH minimal schedule length */
+/* 6TiSCH minimal schedule length - adaptive range: 8 to 101 */
 #define TSCH_SCHEDULE_CONF_DEFAULT_LENGTH 8
+#define TSCH_SCHEDULE_CONF_MAX_LENGTH 101
+#define TSCH_SCHEDULE_CONF_MIN_LENGTH 8
 
-// packet buffer length
-#define QUEUEBUF_CONF_NUM 4
+// Maximum number of TSCH links (must support max slotframe size)
+#define TSCH_SCHEDULE_CONF_MAX_LINKS 101
+
+// packet buffer length (increased to handle more traffic)
+#define QUEUEBUF_CONF_NUM 8
 
 // Payload size
 #define PACKETBUF_CONF_SIZE 125

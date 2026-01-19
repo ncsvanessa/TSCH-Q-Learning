@@ -26,15 +26,18 @@ typedef struct {
 } env_state;
 
 /********** Functions *********/
-// TSCH-based reward function with conflict detection
+// TSCH-based reward function with conflict detection and retransmission penalty
 float tsch_reward_function(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff_prev, 
-                          uint8_t n_buff_new, uint8_t n_conflicts);
+                          uint8_t n_buff_new, uint8_t n_conflicts, float avg_retrans);
 
 // Legacy reward function (backward compatibility)
 float reward(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff, uint8_t n_buff_new);
 
-// Function to find the action with highest q-value, , returns the index of max value
+// Function to find the action with highest q-value, returns the index of max value
 uint8_t get_highest_q_val(void);
+
+// Function to select action using epsilon-greedy strategy (exploration vs exploitation)
+uint8_t get_action_epsilon_greedy(float epsilon);
 
 // Function to get the current state (buffer_size and energy_level)
 env_state *get_current_state(void);

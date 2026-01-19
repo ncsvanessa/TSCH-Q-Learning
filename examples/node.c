@@ -19,8 +19,16 @@
 // period to send a packet to the udp server
 #define SEND_INTERVAL (60 * CLOCK_SECOND)
 
-// period to update Q-values
+// period to update Q-values (120s for better responsiveness)
 #define Q_TABLE_INTERVAL (120 * CLOCK_SECOND)
+
+// epsilon for epsilon-greedy exploration (0.15 = 15% exploration, 85% exploitation)
+#define EPSILON_GREEDY_INITIAL 0.15
+#define EPSILON_DECAY 0.995  // decay factor (multiply epsilon each cycle)
+#define EPSILON_MIN 0.01     // minimum epsilon (always keep some exploration)
+
+// Global epsilon value (starts at initial, decays over time)
+float current_epsilon = EPSILON_GREEDY_INITIAL;
 
 // period for federated synchronization
 // FEDERATED_SYNC_INTERVAL is 180 seconds by default
@@ -46,39 +54,105 @@ char custom_payload[PACKETBUF_CONF_SIZE];
 // single slotframe for all communications 
 struct tsch_slotframe *sf_min;
 // struct tsch_link *link_list[TSCH_SCHEDULE_DEFAULT_LENGTH];
-struct tsch_link *custom_links[TSCH_SCHEDULE_DEFAULT_LENGTH];
+struct tsch_link *custom_links[TSCH_SCHEDULE_CONF_MAX_LENGTH];
+
+// Current slotframe size (adaptive)
+uint8_t current_slotframe_size = TSCH_SCHEDULE_DEFAULT_LENGTH;
 
 /********** Scheduler Setup ***********/
-// Function starts Minimal Shceduler
+// Function starts Minimal Scheduler
 static void init_tsch_schedule(void)
 {
   // create a single slotframe
   //struct tsch_slotframe *sf_min;
   tsch_schedule_remove_all_slotframes();
-  sf_min = tsch_schedule_add_slotframe(0, TSCH_SCHEDULE_DEFAULT_LENGTH);
+  sf_min = tsch_schedule_add_slotframe(0, current_slotframe_size);
 
   // shared/advertising cell at (0, 0)
   custom_links[0] = tsch_schedule_add_link(sf_min, LINK_OPTION_TX | LINK_OPTION_RX | LINK_OPTION_SHARED,
                          LINK_TYPE_ADVERTISING, &tsch_broadcast_address, 0, 0, 1);
 
   // all other cell are initialized as shared/dedicated 
-  for (int i = 1; i < TSCH_SCHEDULE_DEFAULT_LENGTH; i++)
+  for (int i = 1; i < current_slotframe_size; i++)
   {
     custom_links[i] = tsch_schedule_add_link(sf_min, LINK_OPTION_TX | LINK_OPTION_RX | LINK_OPTION_SHARED,
                            LINK_TYPE_NORMAL, &tsch_broadcast_address, i, 0, 1);
   }
+  LOG_INFO("Initial slotframe created with %u slots\n", current_slotframe_size);
 }
 
-// set up new schedule based on the chosen action
+/**
+ * Adaptive slotframe resizing based on Q-Learning
+ * Maps action (0-100) to slotframe size (8-101)
+ * Dynamically adjusts network capacity based on learned behavior
+ */
+void adaptive_slotframe_resize(uint8_t new_size) {
+  // Enforce bounds
+  if (new_size < TSCH_SCHEDULE_CONF_MIN_LENGTH) {
+    new_size = TSCH_SCHEDULE_CONF_MIN_LENGTH;
+  }
+  if (new_size > TSCH_SCHEDULE_CONF_MAX_LENGTH) {
+    new_size = TSCH_SCHEDULE_CONF_MAX_LENGTH;
+  }
+  
+  // Only resize if size actually changes
+  if (new_size == current_slotframe_size) {
+    LOG_INFO("Slotframe size unchanged: %u slots\n", current_slotframe_size);
+    return;
+  }
+  
+  uint8_t old_size = current_slotframe_size;
+  current_slotframe_size = new_size;
+  
+  LOG_INFO("Resizing slotframe: %u -> %u slots\n", old_size, new_size);
+  
+  // Remove all existing links
+  tsch_schedule_remove_all_slotframes();
+  
+  // Create new slotframe with updated size
+  sf_min = tsch_schedule_add_slotframe(0, current_slotframe_size);
+  
+  // Recreate advertising slot (always at slot 0)
+  custom_links[0] = tsch_schedule_add_link(sf_min, 
+                         LINK_OPTION_TX | LINK_OPTION_RX | LINK_OPTION_SHARED,
+                         LINK_TYPE_ADVERTISING, 
+                         &tsch_broadcast_address, 0, 0, 1);
+  
+  // Recreate all other slots
+  for (int i = 1; i < current_slotframe_size; i++) {
+    custom_links[i] = tsch_schedule_add_link(sf_min, 
+                           LINK_OPTION_TX | LINK_OPTION_RX | LINK_OPTION_SHARED,
+                           LINK_TYPE_NORMAL, 
+                           &tsch_broadcast_address, i, 0, 1);
+  }
+  
+  LOG_INFO("Slotframe resized successfully to %u slots\n", current_slotframe_size);
+}
+
+/**
+ * Set up new schedule based on Q-Learning action
+ * Action represents the desired slotframe size:
+ * - Actions 0-100 map to slotframe sizes 8-101
+ * - Lower actions = smaller slotframe (energy efficient, low throughput)
+ * - Higher actions = larger slotframe (high throughput, more energy)
+ */
 void set_up_new_schedule(uint8_t action) {
-  // Action represents number of active slots (besides slot 0 which is always advertising)
-  // Keep slots 0 to action active, disable the rest
+  // Map action (0-100) to slotframe size (8-101)
+  // Using linear mapping: size = 8 + (action * 93 / 100)
+  uint8_t target_size;
   
-  // Note: slot 0 is always kept as advertising slot
-  // Slots 1 to action: keep active
-  // Slots action+1 to end: could be disabled
+  if (action >= Q_VALUE_LIST_SIZE) {
+    action = Q_VALUE_LIST_SIZE - 1;
+  }
   
-  LOG_INFO("Schedule update: action=%u (keeping %u active slots)\n", action, action + 1);
+  // Linear mapping: action 0 -> size 8, action 100 -> size 101
+  target_size = TSCH_SCHEDULE_CONF_MIN_LENGTH + 
+                ((action * (TSCH_SCHEDULE_CONF_MAX_LENGTH - TSCH_SCHEDULE_CONF_MIN_LENGTH)) / (Q_VALUE_LIST_SIZE - 1));
+  
+  LOG_INFO("Q-Learning action=%u maps to slotframe_size=%u\n", action, target_size);
+  
+  // Adaptively resize the slotframe
+  adaptive_slotframe_resize(target_size);
 }
 
 // function to receive udp packets
@@ -110,8 +184,18 @@ void create_payload() {
   }
 }
 
+// Structure to hold transmission statistics
+typedef struct {
+  uint8_t count;
+  float avg_retransmissions;
+} transmission_stats;
+
 // function to empty the queue and/or print the statistics
-uint8_t empty_schedule_records(uint8_t tx_rx) {
+transmission_stats empty_schedule_records(uint8_t tx_rx) {
+  transmission_stats stats;
+  stats.count = 0;
+  stats.avg_retransmissions = 1.0;  // default: no retransmissions
+  
   queue_packet_status *queue;
   if (tx_rx == 0) {
     queue = func_custom_queue_tx();
@@ -120,6 +204,16 @@ uint8_t empty_schedule_records(uint8_t tx_rx) {
     queue = func_custom_queue_rx();
     LOG_INFO(" Receiving Operations in %lu seconds\n", (unsigned long)Q_TABLE_INTERVAL);
   }
+  
+  // Calculate average retransmissions (only for TX)
+  uint16_t total_retrans = 0;
+  if (tx_rx == 0 && queue->size > 0) {
+    for(int i = 0; i < queue->size; i++) {
+      total_retrans += queue->packets[i].transmission_count;
+    }
+    stats.avg_retransmissions = (float)total_retrans / queue->size;
+  }
+  
   #if PRINT_TRANSMISSION_RECORDS
   for(int i=0; i < queue->size; i++){
       LOG_INFO("seqnum:%u trans_count:%u timeslot:%u channel_off:%u\n", 
@@ -129,7 +223,9 @@ uint8_t empty_schedule_records(uint8_t tx_rx) {
       queue->packets[i].channel_offset);
     }
   #endif
-  return emptyQueue(queue);
+  
+  stats.count = emptyQueue(queue);
+  return stats;
 }
 
 /********** UDP Communication Process - Start **********/
@@ -227,8 +323,13 @@ PROCESS_THREAD(scheduler_process, ev, data)
   /* Main Scheduler Loop */
   while (1)
   {
-    // getting the action with the highest q-value and setting up the schedule
-    uint8_t action = get_highest_q_val();
+    // getting the action using epsilon-greedy strategy (exploration + exploitation)
+    uint8_t action = get_action_epsilon_greedy(current_epsilon);
+    uint8_t best_action = get_highest_q_val();
+    LOG_INFO("============ Q-Learning Cycle Start ============\n");
+    LOG_INFO("Selected action: %u (best: %u, epsilon: %.3f)\n", 
+             action, best_action, (double)current_epsilon);
+    LOG_INFO("Slotframe will be resized\n");
     set_up_new_schedule(action);
 
     // record the buffer size and reset conflict counter
@@ -244,26 +345,35 @@ PROCESS_THREAD(scheduler_process, ev, data)
     queue_length = getCurrentQueueLen();
     LOG_INFO("Buffer Size: before=%u after=%u current=%u\n", 
              buffer_len_before, buffer_len_after, *queue_length);
-    LOG_INFO("Chosen Action: %u\n", action);
+    LOG_INFO("Chosen Action: %u, Current Slotframe Size: %u\n", action, current_slotframe_size);
 
     // stopping the slot operations
     udp_com_stop = 1;
     
-    // calculating the number of trans/receptions
-    uint8_t n_tx_count = empty_schedule_records(0);    
-    uint8_t n_rx_count = empty_schedule_records(1);
+    // calculating the number of trans/receptions and retransmission statistics
+    transmission_stats tx_stats = empty_schedule_records(0);
+    transmission_stats rx_stats = empty_schedule_records(1);
 
-    // calculate the reward using the new TSCH reward function with conflict detection
-    float new_reward = tsch_reward_function(n_tx_count, n_rx_count, buffer_len_before, 
-                                           buffer_len_after, n_conflicts);
+    // calculate the reward using the new TSCH reward function with retransmissions
+    float new_reward = tsch_reward_function(tx_stats.count, rx_stats.count, buffer_len_before, 
+                                           buffer_len_after, n_conflicts, tx_stats.avg_retransmissions);
     
-    LOG_INFO("Reward: tx=%u rx=%u conflicts=%u reward=%.2f\n", 
-             n_tx_count, n_rx_count, n_conflicts, (double)new_reward);
+    LOG_INFO("Reward: tx=%u rx=%u conflicts=%u avg_retrans=%.2f reward=%.2f\n", 
+             tx_stats.count, rx_stats.count, n_conflicts, 
+             (double)tx_stats.avg_retransmissions, (double)new_reward);
     
     update_q_table(action, new_reward);
     
     // Increment local sample count for federated learning
     increment_local_samples();
+    
+    // Apply epsilon decay (reduce exploration over time)
+    current_epsilon *= EPSILON_DECAY;
+    if (current_epsilon < EPSILON_MIN) {
+      current_epsilon = EPSILON_MIN;
+    }
+    
+    LOG_INFO("============ Q-Learning Cycle End ============\n\n");
   }
   PROCESS_END();
 }
