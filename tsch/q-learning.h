@@ -26,9 +26,10 @@ typedef struct {
 } env_state;
 
 /********** Functions *********/
-// TSCH-based reward function with conflict detection and retransmission penalty
+// TSCH-based reward function with retransmission penalty
+// Note: conflict detection disabled temporarily (always 0)
 float tsch_reward_function(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff_prev, 
-                          uint8_t n_buff_new, uint8_t n_conflicts, float avg_retrans);
+                          uint8_t n_buff_new, float avg_retrans);
 
 // Legacy reward function (backward compatibility)
 float reward(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff, uint8_t n_buff_new);

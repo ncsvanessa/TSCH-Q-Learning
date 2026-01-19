@@ -37,7 +37,7 @@ typedef struct {
 /********** TSCH Reward Functions *********/
 
 /**
- * Compute reward for TSCH slotframe schedule based on throughput, conflicts, and retransmissions
+ * Compute reward for TSCH slotframe schedule based on throughput and retransmissions
  * Adapted from Python notebook implementation with retransmission penalty
  * 
  * Parameters:
@@ -45,13 +45,13 @@ typedef struct {
  * - n_rx: number of successful receptions
  * - n_buff_prev: buffer size before scheduling period
  * - n_buff_new: buffer size after scheduling period
- * - n_conflicts: number of detected conflicts in the schedule
  * - avg_retrans: average number of retransmissions per packet (1.0 = no retrans)
  * 
- * Returns: reward value (throughput - conflict penalties - buffer penalties - retransmission cost)
+ * Returns: reward value (throughput - buffer penalties - retransmission cost)
+ * Note: Conflict detection temporarily disabled
  */
 float tsch_reward_function(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff_prev, 
-                          uint8_t n_buff_new, uint8_t n_conflicts, float avg_retrans) {
+                          uint8_t n_buff_new, float avg_retrans) {
     float throughput = theta1 * (n_tx + n_rx);
     
     // Calculate buffer difference with cap to prevent extreme negative rewards
@@ -60,7 +60,9 @@ float tsch_reward_function(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff_prev,
     if (buffer_diff > MAX_BUFFER_PENALTY) buffer_diff = MAX_BUFFER_PENALTY;  // cap penalty
     
     float buffer_penalty = theta2 * buffer_diff;
-    float conflict_cost = conflict_penalty * n_conflicts;
+    
+    // Conflict detection disabled for now (would need proper implementation)
+    // float conflict_cost = conflict_penalty * n_conflicts;
     
     // Retransmission penalty: penalize (avg_retrans - 1.0)
     // If avg_retrans = 1.0, no penalty (perfect transmission)
@@ -70,7 +72,7 @@ float tsch_reward_function(uint8_t n_tx, uint8_t n_rx, uint8_t n_buff_prev,
         retrans_penalty = theta3 * (avg_retrans - 1.0);
     }
     
-    return throughput - buffer_penalty - conflict_cost - retrans_penalty;
+    return throughput - buffer_penalty - retrans_penalty;
 }
 
 /**

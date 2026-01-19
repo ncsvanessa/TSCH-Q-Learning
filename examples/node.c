@@ -318,7 +318,7 @@ PROCESS_THREAD(scheduler_process, ev, data)
   uint8_t *queue_length;
   uint8_t buffer_len_before = 0;
   uint8_t buffer_len_after = 0;
-  uint8_t n_conflicts = 0;  // conflict counter
+  // Note: conflict detection not implemented yet
 
   /* Main Scheduler Loop */
   while (1)
@@ -332,9 +332,8 @@ PROCESS_THREAD(scheduler_process, ev, data)
     LOG_INFO("Slotframe will be resized\n");
     set_up_new_schedule(action);
 
-    // record the buffer size and reset conflict counter
+    // record the buffer size
     buffer_len_before = getCustomBuffLen();
-    n_conflicts = 0;
     udp_com_stop = 0;
 
     // set the timer to update Q-table
@@ -354,12 +353,12 @@ PROCESS_THREAD(scheduler_process, ev, data)
     transmission_stats tx_stats = empty_schedule_records(0);
     transmission_stats rx_stats = empty_schedule_records(1);
 
-    // calculate the reward using the new TSCH reward function with retransmissions
+    // calculate the reward using TSCH reward function with retransmissions
     float new_reward = tsch_reward_function(tx_stats.count, rx_stats.count, buffer_len_before, 
-                                           buffer_len_after, n_conflicts, tx_stats.avg_retransmissions);
+                                           buffer_len_after, tx_stats.avg_retransmissions);
     
-    LOG_INFO("Reward: tx=%u rx=%u conflicts=%u avg_retrans=%.2f reward=%.2f\n", 
-             tx_stats.count, rx_stats.count, n_conflicts, 
+    LOG_INFO("Reward: tx=%u rx=%u avg_retrans=%.2f reward=%.2f\n", 
+             tx_stats.count, rx_stats.count, 
              (double)tx_stats.avg_retransmissions, (double)new_reward);
     
     update_q_table(action, new_reward);
