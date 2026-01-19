@@ -7,8 +7,9 @@
 
 /******** Configuration *******/
 // Size of Q-value table (default is the default slotframe size)
+// Using explicit value to avoid circular dependency
 #ifndef Q_VALUE_LIST_SIZE
-#define Q_VALUE_LIST_SIZE TSCH_SCHEDULE_DEFAULT_LENGTH
+#define Q_VALUE_LIST_SIZE 101  // TSCH_SCHEDULE_DEFAULT_LENGTH = 101
 #endif
 
 // printing trans/reception records with slot numbers

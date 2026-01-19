@@ -6,6 +6,7 @@
 #include "sys/node-id.h"
 #include "net/mac/tsch/tsch-slot-operation.h"
 #include "net/queuebuf.h"
+#include "federated-learning.h"
 
 #include "sys/log.h"
 #define LOG_MODULE "App"
@@ -13,12 +14,16 @@
 
 /********** Global variables ***********/
 #define UDP_PORT 8765
+#define UDP_FEDERATED_PORT 8766  // Port for Q-table sharing
 
 // period to send a packet to the udp server
 #define SEND_INTERVAL (60 * CLOCK_SECOND)
 
 // period to update Q-values
 #define Q_TABLE_INTERVAL (120 * CLOCK_SECOND)
+
+// period for federated synchronization (already defined in federated-learning.h)
+// FEDERATED_SYNC_INTERVAL is 180 seconds by default
 
 // period to finish setting up Minimal Scheduling 
 #define SET_UP_MINIMAL_SCHEDULE (120 * CLOCK_SECOND)
@@ -27,8 +32,10 @@
 PROCESS(node_udp_process, "UDP communicatio process");
 // Q-Learning and scheduling process
 PROCESS(scheduler_process, "RL-TSCH Scheduler Process");
+// Federated learning synchronization process
+PROCESS(federated_sync_process, "Federated Learning Sync Process");
 
-AUTOSTART_PROCESSES(&node_udp_process, &scheduler_process);
+AUTOSTART_PROCESSES(&node_udp_process, &scheduler_process, &federated_sync_process);
 
 // variable to stop the udp comm for a while
 uint8_t udp_com_stop = 1;
@@ -146,6 +153,10 @@ PROCESS_THREAD(node_udp_process, ev, data)
   // generate random q-values
   generate_random_q_values();
   LOG_INFO("Q-values initialized\n");
+  
+  // Initialize federated learning
+  federated_learning_init(WEIGHTED_FEDAVG);  // Use weighted averaging
+  LOG_INFO("Federated learning initialized\n");
 
   /* Initialization; `rx_packet` is the function for packet reception */
   simple_udp_register(&udp_conn, UDP_PORT, NULL, UDP_PORT, rx_packet);
@@ -253,8 +264,118 @@ PROCESS_THREAD(scheduler_process, ev, data)
     LOG_INFO("Reward: tx=%u rx=%u conflicts=%u reward=%.2f\n", 
              n_tx_count, n_rx_count, n_conflicts, (double)new_reward);
     
-    update_q_table(action, new_reward);    
+    update_q_table(action, new_reward);
+    
+    // Increment local sample count for federated learning
+    increment_local_samples();
   }
   PROCESS_END();
 }
 /********** RL-TSCH Scheduler Process - End ***********/
+
+/********** Federated Learning Synchronization Process - Start ***********/
+
+// Structure to encapsulate Q-table message
+typedef struct {
+    uint16_t node_id;
+    uint8_t num_samples;
+    uint16_t q_table_size;
+    float q_values[Q_VALUE_LIST_SIZE];
+} q_table_message_t;
+
+// Callback for receiving Q-table messages
+static void rx_qtable_packet(struct simple_udp_connection *c,
+                              const uip_ipaddr_t *sender_addr,
+                              uint16_t sender_port,
+                              const uip_ipaddr_t *receiver_addr,
+                              uint16_t receiver_port,
+                              const uint8_t *data,
+                              uint16_t datalen)
+{
+    if (datalen == sizeof(q_table_message_t)) {
+        q_table_message_t *msg = (q_table_message_t *)data;
+        
+        LOG_INFO("Received Q-table from node %u (samples=%u)\n", 
+                 msg->node_id, msg->num_samples);
+        
+        // Store neighbor's Q-table
+        if (store_neighbor_q_table(msg->node_id, msg->q_values, msg->num_samples)) {
+            LOG_INFO("Successfully stored Q-table from node %u\n", msg->node_id);
+        } else {
+            LOG_WARN("Failed to store Q-table from node %u\n", msg->node_id);
+        }
+    } else {
+        LOG_WARN("Received malformed Q-table message (size=%u, expected=%lu)\n", 
+                 datalen, (unsigned long)sizeof(q_table_message_t));
+    }
+}
+
+PROCESS_THREAD(federated_sync_process, ev, data)
+{
+    static struct simple_udp_connection federated_conn;
+    static struct etimer sync_timer;
+    static struct etimer minimal_schedule_setup_timer;
+    static q_table_message_t q_msg;
+    
+    PROCESS_BEGIN();
+    
+    /* Wait for minimal scheduling to finish */
+    etimer_set(&minimal_schedule_setup_timer, SET_UP_MINIMAL_SCHEDULE);
+    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&minimal_schedule_setup_timer));
+    
+    LOG_INFO("Starting Federated Learning Sync Process\n");
+    
+    // Register UDP connection for Q-table sharing
+    simple_udp_register(&federated_conn, UDP_FEDERATED_PORT, NULL, 
+                       UDP_FEDERATED_PORT, rx_qtable_packet);
+    
+    // Set initial sync timer with small random delay to avoid synchronization
+    etimer_set(&sync_timer, (FEDERATED_SYNC_INTERVAL * CLOCK_SECOND) + 
+               (random_rand() % (30 * CLOCK_SECOND)));
+    
+    /* Main Federated Sync Loop */
+    while (1) {
+        PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&sync_timer));
+        
+        // Clean up stale neighbors (timeout: 2x sync interval)
+        cleanup_stale_neighbors(FEDERATED_SYNC_INTERVAL * 2);
+        
+        // Broadcast local Q-table to neighbors
+        if (NETSTACK_ROUTING.node_is_reachable()) {
+            // Prepare Q-table message
+            q_msg.node_id = node_id;
+            q_msg.num_samples = get_local_sample_count();
+            q_msg.q_table_size = Q_VALUE_LIST_SIZE;
+            
+            float *local_q = get_local_q_table_for_sharing();
+            memcpy(q_msg.q_values, local_q, Q_VALUE_LIST_SIZE * sizeof(float));
+            
+            // Broadcast to all nodes (use broadcast address)
+            uip_ipaddr_t broadcast_addr;
+            uip_create_linklocal_allnodes_mcast(&broadcast_addr);
+            
+            LOG_INFO("Broadcasting Q-table (samples=%u)\n", q_msg.num_samples);
+            simple_udp_sendto(&federated_conn, &q_msg, sizeof(q_msg), &broadcast_addr);
+            
+            // Perform federated aggregation
+            uint8_t num_aggregated = federated_aggregate();
+            
+            if (num_aggregated > 0) {
+                uint8_t neighbors, samples;
+                fed_aggregation_method_t method;
+                get_federated_stats(&neighbors, &samples, &method);
+                
+                LOG_INFO("Federated aggregation complete: neighbors=%u, method=%u, local_samples=%u\n",
+                         neighbors, method, samples);
+            } else {
+                LOG_INFO("No neighbors to aggregate with\n");
+            }
+        }
+        
+        // Reset timer for next sync cycle
+        etimer_set(&sync_timer, FEDERATED_SYNC_INTERVAL * CLOCK_SECOND);
+    }
+    
+    PROCESS_END();
+}
+/********** Federated Learning Synchronization Process - End **********/
