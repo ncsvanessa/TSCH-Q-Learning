@@ -22,7 +22,7 @@
 // period to update Q-values
 #define Q_TABLE_INTERVAL (120 * CLOCK_SECOND)
 
-// period for federated synchronization (already defined in federated-learning.h)
+// period for federated synchronization
 // FEDERATED_SYNC_INTERVAL is 180 seconds by default
 
 // period to finish setting up Minimal Scheduling 
@@ -76,11 +76,9 @@ void set_up_new_schedule(uint8_t action) {
   
   // Note: slot 0 is always kept as advertising slot
   // Slots 1 to action: keep active
-  // Slots action+1 to end: could be disabled (but we keep them as shared for now)
+  // Slots action+1 to end: could be disabled
   
   LOG_INFO("Schedule update: action=%u (keeping %u active slots)\n", action, action + 1);
-  // In this simplified version, we just log the action
-  // The actual slot management would require more complex logic
 }
 
 // function to receive udp packets
@@ -162,8 +160,6 @@ PROCESS_THREAD(node_udp_process, ev, data)
   simple_udp_register(&udp_conn, UDP_PORT, NULL, UDP_PORT, rx_packet);
 
   // Start TSCH with custom schedule
-  // TSCH will auto-start because TSCH_CONF_AUTOSTART is 1
-  // But we setup our custom schedule first
   init_tsch_schedule();
   LOG_INFO("Custom TSCH schedule initialized\n");
   
