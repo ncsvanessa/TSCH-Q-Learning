@@ -7,6 +7,7 @@
 #include "net/mac/tsch/tsch-slot-operation.h"
 #include "net/queuebuf.h"
 #include "federated-learning.h"
+#include "slot-configuration.h"
 
 #include "sys/log.h"
 #define LOG_MODULE "App"
@@ -153,6 +154,11 @@ void set_up_new_schedule(uint8_t action) {
   
   // Adaptively resize the slotframe
   adaptive_slotframe_resize(target_size);
+  
+  // Update slot configuration manager with new size
+  update_slotframe_size(target_size);
+  
+  // Note: Slot reconfiguration moved to main loop after statistics collection
 }
 
 // function to receive udp packets
@@ -172,8 +178,24 @@ static void rx_packet(struct simple_udp_connection *c,
 
     LOG_INFO("Received from ");
     LOG_INFO_6ADDR(sender_addr);
-    LOG_INFO_(", seqnum %" PRIu32, seqnum);
-    LOG_INFO_("  data: %s\n", data);
+    LOG_INFO_(", seqnum %" PRIu32 ", datalen %u", seqnum, datalen);
+    
+    // Only print data if it looks like text (all printable ASCII)
+    if (datalen > sizeof(seqnum) && datalen < 200) {
+      uint8_t is_text = 1;
+      for (int i = sizeof(seqnum); i < datalen && i < sizeof(seqnum) + 50; i++) {
+        if (data[i] < 32 || data[i] > 126) {
+          is_text = 0;
+          break;
+        }
+      }
+      if (is_text) {
+        LOG_INFO_("  data: %s", (char*)(data + sizeof(seqnum)));
+      } else {
+        LOG_INFO_("  [binary data]");
+      }
+    }
+    LOG_INFO_("\n");
   }
 }
 
@@ -250,8 +272,10 @@ PROCESS_THREAD(node_udp_process, ev, data)
   
   // Initialize federated learning
   federated_learning_init(WEIGHTED_FEDAVG);  // Use weighted averaging
-  LOG_INFO("Federated learning initialized\n");
-
+  LOG_INFO("Federated learning initialized\n");  
+  // Initialize slot configuration manager
+  slot_config_init(TSCH_SCHEDULE_DEFAULT_LENGTH);
+  LOG_INFO("Slot configuration manager initialized\n");
   /* Initialization; `rx_packet` is the function for packet reception */
   simple_udp_register(&udp_conn, UDP_PORT, NULL, UDP_PORT, rx_packet);
 
@@ -353,15 +377,35 @@ PROCESS_THREAD(scheduler_process, ev, data)
     transmission_stats tx_stats = empty_schedule_records(0);
     transmission_stats rx_stats = empty_schedule_records(1);
 
+    // Analyze slot-level performance
+    float avg_slot_reward = analyze_slot_performance();
+    float slot_efficiency_bonus = compute_slot_efficiency_reward();
+    
     // calculate the reward using TSCH reward function with retransmissions
     float new_reward = tsch_reward_function(tx_stats.count, rx_stats.count, buffer_len_before, 
                                            buffer_len_after, tx_stats.avg_retransmissions);
     
-    LOG_INFO("Reward: tx=%u rx=%u avg_retrans=%.2f reward=%.2f\n", 
+    // Add slot-level efficiency bonus to overall reward
+    new_reward += slot_efficiency_bonus;
+    
+    LOG_INFO("Reward: tx=%u rx=%u avg_retrans=%.2f base_reward=%.2f slot_bonus=%.2f total=%.2f\n", 
              tx_stats.count, rx_stats.count, 
-             (double)tx_stats.avg_retransmissions, (double)new_reward);
+             (double)tx_stats.avg_retransmissions, (double)new_reward - slot_efficiency_bonus,
+             (double)slot_efficiency_bonus, (double)new_reward);
+    
+    LOG_INFO("Slot performance: avg_slot_reward=%.2f\n", (double)avg_slot_reward);
     
     update_q_table(action, new_reward);
+    
+    // Print slot summary and apply adaptive reconfiguration periodically (BEFORE reset!)
+    if (should_reconfigure_slots()) {
+      print_slot_summary();
+      LOG_INFO("Applying adaptive slot reconfiguration (cycle-based)\n");
+      reconfigure_slots_adaptive(sf_min, custom_links);
+    }
+    
+    // Reset slot statistics for next learning cycle (AFTER reconfiguration!)
+    reset_slot_statistics();
     
     // Increment local sample count for federated learning
     increment_local_samples();

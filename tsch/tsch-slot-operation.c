@@ -56,6 +56,7 @@
 
 /**************************** My modifications - Start ********************************/
 #include "customized-tsch-file.h"
+#include "slot-configuration.h"
 /**************************** My modifications - End **********************************/
 
 #include "sys/log.h"
@@ -800,6 +801,17 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
     ptk_tx.channel_offset = current_link->channel_offset;
     enqueue(custom_queue_tx, ptk_tx);
   }
+  
+  // Track slot-level statistics for ALL successful TX (not just time source)
+  if(mac_tx_status == MAC_TX_OK && current_link != NULL && check_data) {
+    linkaddr_t *dest = (linkaddr_t *)queuebuf_addr(current_packet->qb, PACKETBUF_ADDR_RECEIVER);
+    slot_record_tx(current_link->timeslot, dest, current_packet->transmissions);
+  }
+  
+  // Track collisions
+  if(mac_tx_status == MAC_TX_COLLISION && current_link != NULL) {
+    slot_record_collision(current_link->timeslot);
+  }
 #endif /* RL_TSCH_ENABLED */
 /**************************** My modifications - End **********************************/
 
@@ -1055,6 +1067,9 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
     ptk_rx.time_slot = current_link->timeslot;
     ptk_rx.channel_offset = current_link->channel_offset;
     enqueue(custom_queue_rx, ptk_rx);
+    
+    // Track slot-level statistics for successful RX
+    slot_record_rx(current_link->timeslot, &source_address);
   }
 #endif /* RL_TSCH_ENABLED */
 /**************************** My modifications - End **********************************/
